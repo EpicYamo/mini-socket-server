@@ -1,12 +1,12 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   main.cpp                                           :+:      :+:    :+:   */
+/*   blocking_echo_server.cpp                           :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/07/30 23:40:13 by aaycan            #+#    #+#             */
-/*   Updated: 2026/07/31 03:29:52 by aaycan           ###   ########.fr       */
+/*   Created: 2026/08/06 17:33:19 by aaycan            #+#    #+#             */
+/*   Updated: 2026/08/06 17:33:22 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -103,16 +103,18 @@ static int	accept_connection(int server_fd)
 	int					client_fd;
 
 	client_len	= sizeof(client_address);
-	client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_len);
-	if (client_fd == -1)
+	while (1)
 	{
-		std::cerr << "Error: accept() failed" << std::endl;
-		close(server_fd);
-		return (1);
+		client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_len);
+		if (client_fd == -1)
+		{
+			std::cerr << "Error: accept() failed" << std::endl;
+			close(server_fd);
+			return (1);
+		}
+		std::cout << "Client connected, fd = " << client_fd << std::endl;
+		handle_client(client_fd);
 	}
-	std::cout << "Client connected, fd = " << client_fd << std::endl;
-	handle_client(client_fd);
-	return (0);
 }
 
 static void	handle_client(int client_fd)
@@ -120,16 +122,25 @@ static void	handle_client(int client_fd)
 	char	buffer[1024];
 	ssize_t	bytes_read;
 
-	bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-	if (bytes_read == -1)
+	while (1)
 	{
-		std::cerr << "Error: read() failed" << std::endl;
-		close(client_fd);
-		return ;
+		bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+		if (bytes_read <= 0)
+		{
+    		if (bytes_read == -1)
+    		    std::cerr << "Error: read() failed" << std::endl;
+    		close(client_fd);
+    		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+    		return ;
+		}
+		std::string received(buffer, bytes_read);
+		std::cout << "Recieved: " << received;
+		if (received == "exit\r\n")
+		{
+			close(client_fd);
+			std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+			return ;
+		}
+		write(client_fd, received.c_str(), received.size());
 	}
-	buffer[bytes_read] = '\0';
-	std::cout << "Recieved: " << buffer << std::endl;
-	write(client_fd, buffer, bytes_read);
-	close(client_fd);
-	std::cout << "Client disconnected, fd = " << client_fd << std::endl;
 }
