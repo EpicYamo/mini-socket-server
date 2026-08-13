@@ -6,7 +6,174 @@
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/08/06 17:32:59 by aaycan            #+#    #+#             */
-/*   Updated: 2026/08/06 17:33:25 by aaycan           ###   ########.fr       */
+/*   Updated: 2026/08/12 02:00:45 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
+#include <iostream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <vector>
+
+static int	allow_address_reuse(int server_fd);
+static int	bind_socket(int server_fd, struct sockaddr_in *address);
+static int	start_listening(int server_fd);
+static int	accept_connection(int server_fd);
+static void	handle_client(int client_fd);
+static int	set_non_blocking(int fd);
+static void	run_server(int server_fd);
+
+int main()
+{
+    int					server_fd;
+    struct sockaddr_in	address;
+
+	server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (server_fd == -1)
+	{
+		std::cerr << "Error: socket() failed" << std::endl;
+		return (1);
+	}
+	std::cout << "Socket created, fd = " << server_fd << std::endl;
+	address = sockaddr_in();
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = INADDR_ANY;
+	address.sin_port = htons(8080);
+	if (allow_address_reuse(server_fd) == 1)
+		return (1);
+	if (bind_socket(server_fd, &address) == 1)
+		return (1);
+	if (start_listening(server_fd) == 1)
+		return (1);
+	if (set_non_blocking(server_fd) == 1)
+		return (1);
+	run_server(server_fd);
+	close(server_fd);
+	std::cout << "Socket closed" << std::endl;
+	return (0);
+}
+
+static int	allow_address_reuse(int server_fd)
+{
+	int	opt;
+	int	sockopt_result;
+
+	opt = 1;
+	sockopt_result = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	if (sockopt_result == -1)
+	{
+		std::cerr << "Error: setsockopt() failed" << std::endl;
+		close(server_fd);
+		return (1);
+	}
+	return (0);
+}
+
+static int	bind_socket(int server_fd, struct sockaddr_in *address)
+{
+	int	bind_result;
+
+	bind_result = bind(server_fd, (struct sockaddr *)address, sizeof(*address));
+	if (bind_result == -1)
+	{
+		std::cerr << "Error: bind() failed" << std::endl;
+		close(server_fd);
+		return (1);
+	}
+	std::cout << "Socket bound to port 8080" << std::endl;
+	return (0);
+}
+
+static int	start_listening(int server_fd)
+{
+	int	listen_result;
+
+	listen_result = listen(server_fd, 10);
+	if (listen_result == -1)
+	{
+		std::cerr << "Error: listen() failed" << std::endl;
+		close(server_fd);
+		return (1);
+	}
+	std::cout << "Server listening on port 8080..." << std::endl;
+	return (0);
+}
+
+static void	handle_client(int client_fd)
+{
+	char	buffer[1024];
+	ssize_t	bytes_read;
+
+	while (1)
+	{
+		bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+		if (bytes_read <= 0)
+		{
+    		if (bytes_read == -1)
+    		    std::cerr << "Error: read() failed" << std::endl;
+    		close(client_fd);
+    		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+    		return ;
+		}
+		std::string received(buffer, bytes_read);
+		std::cout << "Recieved: " << received;
+		if (received == "exit\r\n")
+		{
+			close(client_fd);
+			std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+			return ;
+		}
+		write(client_fd, received.c_str(), received.size());
+	}
+}
+
+static int	set_non_blocking(int fd)
+{
+	int	flags;
+
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags == -1)
+	{
+		std::cerr << "Error: fcntl(F_GETFL) failed" << std::endl;
+		close(fd);
+		return (1);
+	}
+	if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+	{
+		std::cerr << "Error: fcntl(F_SETFL) failed" << std::endl;
+		close(fd);
+		return (1);
+	}
+	return (0);
+}
+
+static void	run_server(int server_fd)
+{
+	std::vector<pollfd>	poll_fds;
+	pollfd				server_entry;
+	int					poll_result;
+
+	server_entry.fd = server_fd;
+	server_entry.events = POLLIN;
+	server_entry.revents = 0;
+	poll_fds.push_back(server_entry);
+	while (1)
+	{
+		poll_result = poll(poll_fds.data(), poll_fds.size(), -1);
+		if (poll_result == -1)
+		{
+			std::cerr << "Error: poll() failed" << std::endl;
+			break ;
+		}
+		for (size_t i = 0; i < poll_fds.size(); i++)
+		{
+			if (poll_fds[i].revents & POLLIN)
+			{
+				
+			}
+		}
+	}
+}
