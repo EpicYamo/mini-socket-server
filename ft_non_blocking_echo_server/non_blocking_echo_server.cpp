@@ -6,7 +6,7 @@
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/08/06 17:32:59 by aaycan            #+#    #+#             */
-/*   Updated: 2026/08/18 04:39:50 by aaycan           ###   ########.fr       */
+/*   Updated: 2026/08/18 05:06:21 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -17,6 +17,11 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <vector>
+#include <map>
+#include <csignal>
+#include <cerrno>
+
+static volatile sig_atomic_t	g_shutdown = 0;
 
 static int	allow_address_reuse(int server_fd);
 static int	bind_socket(int server_fd, struct sockaddr_in *address);
@@ -24,14 +29,23 @@ static int	start_listening(int server_fd);
 static int	set_non_blocking(int fd);
 static void	run_server(int server_fd);
 static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds);
-static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index, std::vector<int> &to_remove);
-static void	remove_closed_clients(std::vector<pollfd> &poll_fds, std::vector<int> &to_remove);
+static bool	handle_client_read(std::vector<pollfd> &poll_fds, size_t index,
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes);
+static void	handle_client_write(std::vector<pollfd> &poll_fds, size_t index,
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes);
+static void	remove_closed_clients(std::vector<pollfd> &poll_fds,
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes);
+static void	handle_sigint(int signum);
 
 int main()
 {
     int					server_fd;
     struct sockaddr_in	address;
 
+	signal(SIGINT, handle_sigint);
 	server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (server_fd == -1)
 	{
@@ -55,6 +69,12 @@ int main()
 	close(server_fd);
 	std::cout << "Socket closed" << std::endl;
 	return (0);
+}
+
+static void	handle_sigint(int signum)
+{
+	(void)signum;
+	g_shutdown = 1;
 }
 
 static int	allow_address_reuse(int server_fd)
@@ -125,36 +145,51 @@ static int	set_non_blocking(int fd)
 
 static void	run_server(int server_fd)
 {
-	std::vector<pollfd>	poll_fds;
-	pollfd				server_entry;
-	int					poll_result;
-	std::vector<int>	to_remove;
+	std::vector<pollfd>			poll_fds;
+	pollfd						server_entry;
+	int							poll_result;
+	std::vector<int>			to_remove;
+	std::map<int, std::string>	pending_writes;
 
 	server_entry.fd = server_fd;
 	server_entry.events = POLLIN;
 	server_entry.revents = 0;
 	poll_fds.push_back(server_entry);
-	while (1)
+	while (!g_shutdown)
 	{
 		poll_result = poll(poll_fds.data(), poll_fds.size(), -1);
 		if (poll_result == -1)
 		{
+			if (errno == EINTR)
+				continue ;
 			std::cerr << "Error: poll() failed" << std::endl;
 			break ;
 		}
 		to_remove.clear();
 		for (size_t i = 0; i < poll_fds.size(); i++)
 		{
-			if (poll_fds[i].revents & POLLIN)
+			bool	still_connected;
+			
+			still_connected = true;
+			if (poll_fds[i].fd == server_fd)
 			{
-				if (poll_fds[i].fd == server_fd)
+				if (poll_fds[i].revents & POLLIN)
 					handle_new_connection(server_fd, poll_fds);
-				else
-					handle_client_data(poll_fds, i, to_remove);
+				continue ;
 			}
+			if (poll_fds[i].revents & POLLIN)
+				still_connected = handle_client_read(poll_fds, i, to_remove, pending_writes);
+			if (still_connected && (poll_fds[i].revents & POLLOUT))
+				handle_client_write(poll_fds, i, to_remove, pending_writes);
 		}
-		remove_closed_clients(poll_fds, to_remove);
+		remove_closed_clients(poll_fds, to_remove, pending_writes);
 	}
+	for (size_t i = 0; i < poll_fds.size(); i++)
+	{
+		if (poll_fds[i].fd != server_fd)
+			close(poll_fds[i].fd);
+	}
+	std::cout << "[Shutting down the server]" << std::endl;
 }
 
 static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds)
@@ -183,8 +218,9 @@ static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds)
 	}
 }
 
-static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index,
-				std::vector<int> &to_remove)
+static bool	handle_client_read(std::vector<pollfd> &poll_fds, size_t index,
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes)
 {
 	char	buffer[1024];
 	ssize_t	bytes_read;
@@ -199,15 +235,18 @@ static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index,
 		close(client_fd);
 		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
 		to_remove.push_back(client_fd);
-		return ;
+		return (false);
 	}
 	std::string received(buffer, bytes_read);
 	std::cout << "Received: " << received;
-	write(client_fd, received.c_str(), received.size());
+	pending_writes[client_fd] += received;
+	poll_fds[index].events |= POLLOUT;
+	return (true);
 }
 
 static void	remove_closed_clients(std::vector<pollfd> &poll_fds,
-				std::vector<int> &to_remove)
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes)
 {
 	size_t	i;
 	size_t	j;
@@ -215,6 +254,7 @@ static void	remove_closed_clients(std::vector<pollfd> &poll_fds,
 	i = 0;
 	while (i < to_remove.size())
 	{
+		pending_writes.erase(to_remove[i]);
 		j = 0;
 		while (j < poll_fds.size())
 		{
@@ -226,5 +266,37 @@ static void	remove_closed_clients(std::vector<pollfd> &poll_fds,
 			j++;
 		}
 		i++;
+	}
+}
+
+static void	handle_client_write(std::vector<pollfd> &poll_fds, size_t index,
+				std::vector<int> &to_remove,
+				std::map<int, std::string> &pending_writes)
+{
+	int										client_fd;
+	std::map<int, std::string>::iterator	it;
+	ssize_t									bytes_written;
+
+	client_fd = poll_fds[index].fd;
+	it = pending_writes.find(client_fd);
+	if (it == pending_writes.end())
+	{
+		poll_fds[index].events &= ~POLLOUT;
+		return ;
+	}
+	bytes_written = write(client_fd, it->second.c_str(), it->second.size());
+	if (bytes_written == -1)
+	{
+		std::cerr << "Error: write() failed" << std::endl;
+		close(client_fd);
+		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+		to_remove.push_back(client_fd);
+		return ;
+	}
+	it->second.erase(0, bytes_written);
+	if (it->second.empty())
+	{
+		pending_writes.erase(it);
+		poll_fds[index].events &= ~POLLOUT;
 	}
 }
