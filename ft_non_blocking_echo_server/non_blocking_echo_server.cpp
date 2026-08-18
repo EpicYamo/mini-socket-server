@@ -6,7 +6,7 @@
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/08/06 17:32:59 by aaycan            #+#    #+#             */
-/*   Updated: 2026/08/12 02:00:45 by aaycan           ###   ########.fr       */
+/*   Updated: 2026/08/18 03:38:57 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -21,10 +21,10 @@
 static int	allow_address_reuse(int server_fd);
 static int	bind_socket(int server_fd, struct sockaddr_in *address);
 static int	start_listening(int server_fd);
-static int	accept_connection(int server_fd);
-static void	handle_client(int client_fd);
 static int	set_non_blocking(int fd);
 static void	run_server(int server_fd);
+static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds);
+static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index);
 
 int main()
 {
@@ -102,34 +102,6 @@ static int	start_listening(int server_fd)
 	return (0);
 }
 
-static void	handle_client(int client_fd)
-{
-	char	buffer[1024];
-	ssize_t	bytes_read;
-
-	while (1)
-	{
-		bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-		if (bytes_read <= 0)
-		{
-    		if (bytes_read == -1)
-    		    std::cerr << "Error: read() failed" << std::endl;
-    		close(client_fd);
-    		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
-    		return ;
-		}
-		std::string received(buffer, bytes_read);
-		std::cout << "Recieved: " << received;
-		if (received == "exit\r\n")
-		{
-			close(client_fd);
-			std::cout << "Client disconnected, fd = " << client_fd << std::endl;
-			return ;
-		}
-		write(client_fd, received.c_str(), received.size());
-	}
-}
-
 static int	set_non_blocking(int fd)
 {
 	int	flags;
@@ -172,8 +144,59 @@ static void	run_server(int server_fd)
 		{
 			if (poll_fds[i].revents & POLLIN)
 			{
-				
+				if (poll_fds[i].fd == server_fd)
+					handle_new_connection(server_fd, poll_fds);
+				else
+					handle_client_data(poll_fds, i);
 			}
 		}
 	}
+}
+
+static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds)
+{
+	struct sockaddr_in	client_address;
+	socklen_t			client_len;
+	int					client_fd;
+	pollfd				client_entry;
+
+	client_len = sizeof(client_address);
+	client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_len);
+	if (client_fd == -1)
+		std::cerr << "Error: accept() failed" << std::endl;
+	else
+	{
+		if (set_non_blocking(client_fd) == 1)
+			close(client_fd);
+		else
+		{
+			client_entry.fd = client_fd;
+			client_entry.events = POLLIN;
+			client_entry.revents = 0;
+			poll_fds.push_back(client_entry);
+			std::cout << "Client connected, fd = " << client_fd << std::endl;
+		}
+	}
+}
+
+static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index)
+{
+	char	buffer[1024];
+	ssize_t	bytes_read;
+	int		client_fd;
+
+	client_fd = poll_fds[index].fd;
+	bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+	if (bytes_read <= 0)
+	{
+		if (bytes_read == -1)
+			std::cerr << "Error: read() failed" << std::endl;
+		close(client_fd);
+		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
+		poll_fds.erase(poll_fds.begin() + index);
+		return ;
+	}
+	std::string received(buffer, bytes_read);
+	std::cout << "Received: " << received;
+	write(client_fd, received.c_str(), received.size());
 }
