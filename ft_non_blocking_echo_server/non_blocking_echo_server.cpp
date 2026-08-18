@@ -6,7 +6,7 @@
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/08/06 17:32:59 by aaycan            #+#    #+#             */
-/*   Updated: 2026/08/18 03:38:57 by aaycan           ###   ########.fr       */
+/*   Updated: 2026/08/18 03:51:06 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -186,7 +186,7 @@ static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index)
 	int		client_fd;
 
 	client_fd = poll_fds[index].fd;
-	bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+	bytes_read = read(client_fd, buffer, sizeof(buffer));
 	if (bytes_read <= 0)
 	{
 		if (bytes_read == -1)
