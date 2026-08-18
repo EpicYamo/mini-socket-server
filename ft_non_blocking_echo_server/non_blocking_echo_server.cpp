@@ -6,7 +6,7 @@
 /*   By: aaycan <aaycan@student.42kocaeli.com.tr    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/08/06 17:32:59 by aaycan            #+#    #+#             */
-/*   Updated: 2026/08/18 03:51:06 by aaycan           ###   ########.fr       */
+/*   Updated: 2026/08/18 04:39:50 by aaycan           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -24,7 +24,8 @@ static int	start_listening(int server_fd);
 static int	set_non_blocking(int fd);
 static void	run_server(int server_fd);
 static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds);
-static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index);
+static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index, std::vector<int> &to_remove);
+static void	remove_closed_clients(std::vector<pollfd> &poll_fds, std::vector<int> &to_remove);
 
 int main()
 {
@@ -127,6 +128,7 @@ static void	run_server(int server_fd)
 	std::vector<pollfd>	poll_fds;
 	pollfd				server_entry;
 	int					poll_result;
+	std::vector<int>	to_remove;
 
 	server_entry.fd = server_fd;
 	server_entry.events = POLLIN;
@@ -140,6 +142,7 @@ static void	run_server(int server_fd)
 			std::cerr << "Error: poll() failed" << std::endl;
 			break ;
 		}
+		to_remove.clear();
 		for (size_t i = 0; i < poll_fds.size(); i++)
 		{
 			if (poll_fds[i].revents & POLLIN)
@@ -147,9 +150,10 @@ static void	run_server(int server_fd)
 				if (poll_fds[i].fd == server_fd)
 					handle_new_connection(server_fd, poll_fds);
 				else
-					handle_client_data(poll_fds, i);
+					handle_client_data(poll_fds, i, to_remove);
 			}
 		}
+		remove_closed_clients(poll_fds, to_remove);
 	}
 }
 
@@ -179,7 +183,8 @@ static void handle_new_connection(int server_fd, std::vector<pollfd> &poll_fds)
 	}
 }
 
-static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index)
+static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index,
+				std::vector<int> &to_remove)
 {
 	char	buffer[1024];
 	ssize_t	bytes_read;
@@ -193,10 +198,33 @@ static void	handle_client_data(std::vector<pollfd> &poll_fds, size_t index)
 			std::cerr << "Error: read() failed" << std::endl;
 		close(client_fd);
 		std::cout << "Client disconnected, fd = " << client_fd << std::endl;
-		poll_fds.erase(poll_fds.begin() + index);
+		to_remove.push_back(client_fd);
 		return ;
 	}
 	std::string received(buffer, bytes_read);
 	std::cout << "Received: " << received;
 	write(client_fd, received.c_str(), received.size());
+}
+
+static void	remove_closed_clients(std::vector<pollfd> &poll_fds,
+				std::vector<int> &to_remove)
+{
+	size_t	i;
+	size_t	j;
+
+	i = 0;
+	while (i < to_remove.size())
+	{
+		j = 0;
+		while (j < poll_fds.size())
+		{
+			if (poll_fds[j].fd == to_remove[i])
+			{
+				poll_fds.erase(poll_fds.begin() + j);
+				break ;
+			}
+			j++;
+		}
+		i++;
+	}
 }
